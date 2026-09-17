@@ -54,12 +54,13 @@ export function maybeUnzip(filePath: string, destDir: string): string[] {
   return zip.getEntries().filter((e) => !e.isDirectory).map((e) => e.entryName)
 }
 
-/** 从 URL 推断原始文件名（无扩展名时按 type 补） */
+/** 从 URL 推断原始文件名（无扩展名时按 type 补）。解码后含路径分隔符的名称视为非法，走兜底 */
 export function fileNameFromUrl(url: string, type: string, index: number): string {
   let name = ''
   try {
     const u = new URL(url)
-    name = basename(u.pathname)
+    name = decodeURIComponent(basename(u.pathname))
+    if (/[\\/]/.test(name) || name === '..') name = ''
   } catch {
     name = ''
   }

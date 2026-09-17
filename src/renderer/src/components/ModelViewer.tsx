@@ -3,7 +3,15 @@ import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
+import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js'
+import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js'
+import { extOfUrl, pickPreviewUrl } from '../lib/preview'
 import { useAppStore } from '../store/app'
+
+/** OBJ/STL 无材质时使用的统一标准材质（适配 RoomEnvironment 环境光） */
+function defaultMaterial(): THREE.MeshStandardMaterial {
+  return new THREE.MeshStandardMaterial({ color: 0xbfc4cc, metalness: 0.1, roughness: 0.65 })
+}
 
 /**
  * Three.js 模型预览：OrbitControls、网格、光照、自动取景、线框切换。
@@ -25,6 +33,9 @@ function ModelViewer(): React.JSX.Element {
 
   const tasks = useAppStore((s) => s.tasks)
   const selectedTaskId = useAppStore((s) => s.selectedTaskId)
+  // 仅当"选中任务的产物列表"变化时才重新加载模型（线框切换/其他任务事件不应触发重载）
+  const selectedTask = tasks.find((t) => t.taskId === selectedTaskId)
+  const outputKey = selectedTask?.status === 'done' ? selectedTask.outputUrls.join('|') : ''
 
   // 场景初始化（一次）
   useEffect(() => {
@@ -116,12 +127,13 @@ function ModelViewer(): React.JSX.Element {
     if (grid) grid.visible = showGrid
   }, [wireframe, showGrid, loadState])
 
-  // 选中任务变化时加载模型
+  // 选中任务/产物变化时加载模型（按 GLB→OBJ→STL 优先级）
   useEffect(() => {
-    const task = tasks.find((t) => t.taskId === selectedTaskId)
-    // 清理旧模型
     const scene = sceneRef.current
-    if (scene && modelRef.current) {
+    if (!scene) return
+    const task = useAppStore.getState().tasks.find((t) => t.taskId === selectedTaskId)
+    // 清理旧模型
+    if (modelRef.current) {
       scene.remove(modelRef.current)
       disposeGroup(modelRef.current)
       modelRef.current = null
@@ -131,37 +143,70 @@ function ModelViewer(): React.JSX.Element {
       setLoadMessage('')
       return
     }
-    const url = task.outputUrls.find((u) => /\.(glb)$/i.test(decodeURIComponent(u)))
-    if (!url) {
-      const any = task.outputUrls[0]
-      setLoadState(any ? 'unsupported' : 'empty')
+    const picked = pickPreviewUrl(task.outputUrls)
+    if (!picked.url) {
+      setLoadState(picked.unsupportedExt ? 'unsupported' : 'empty')
       setLoadMessage(
-        any ? `该格式暂不支持预览（${extOf(any)}），可从任务列表导出文件` : ''
+        picked.unsupportedExt
+          ? `该格式暂不支持预览（${picked.unsupportedExt}），可从任务列表导出文件`
+          : ''
       )
       return
     }
+    let disposed = false
     setLoadState('loading')
     setLoadMessage('模型加载中…')
-    const loader = new GLTFLoader()
-    loader.load(
-      url,
-      (gltf) => {
-        const model = gltf.scene
-        sceneRef.current?.add(model)
-        modelRef.current = model
-        applyWireframe(model, wireframe)
-        frameModel(model, cameraRef.current, controlsRef.current)
-        setLoadState('loaded')
-        setLoadMessage('')
-      },
-      undefined,
-      (err) => {
-        console.error('GLB 加载失败', err)
-        setLoadState('error')
-        setLoadMessage('模型加载失败，请重试或查看日志')
+    const ext = extOfUrl(picked.url)
+    const onLoaded = (model: THREE.Group): void => {
+      if (disposed) {
+        disposeGroup(model)
+        return
       }
-    )
-  }, [tasks, selectedTaskId, wireframe])
+      scene.add(model)
+      modelRef.current = model
+      // 线框值由下方 effect 在 loadState 变为 loaded 时统一应用
+      frameModel(model, cameraRef.current, controlsRef.current)
+      setLoadState('loaded')
+      setLoadMessage('')
+    }
+    const onError = (err: unknown): void => {
+      if (disposed) return
+      console.error(`${ext.toUpperCase()} 加载失败`, err)
+      setLoadState('error')
+      setLoadMessage('模型加载失败，请重试或查看日志')
+    }
+    if (ext === 'obj') {
+      new OBJLoader().load(
+        picked.url,
+        (obj) => {
+          // OBJLoader 默认 MeshPhongMaterial，统一换成标准材质以适配环境光
+          obj.traverse((o) => {
+            const mesh = o as THREE.Mesh
+            if (mesh.isMesh) mesh.material = defaultMaterial()
+          })
+          onLoaded(obj)
+        },
+        undefined,
+        onError
+      )
+    } else if (ext === 'stl') {
+      new STLLoader().load(
+        picked.url,
+        (geometry) => {
+          const group = new THREE.Group()
+          group.add(new THREE.Mesh(geometry, defaultMaterial()))
+          onLoaded(group)
+        },
+        undefined,
+        onError
+      )
+    } else {
+      new GLTFLoader().load(picked.url, (gltf) => onLoaded(gltf.scene), undefined, onError)
+    }
+    return () => {
+      disposed = true
+    }
+  }, [selectedTaskId, outputKey])
 
   return (
     <section className="viewer">
@@ -201,24 +246,6 @@ function ModelViewer(): React.JSX.Element {
       )}
     </section>
   )
-}
-
-function extOf(url: string): string {
-  const name = decodeURIComponent(url)
-  const idx = name.lastIndexOf('.')
-  return idx >= 0 ? name.slice(idx + 1).toUpperCase() : ''
-}
-
-function applyWireframe(model: THREE.Group, wireframe: boolean): void {
-  model.traverse((obj) => {
-    const mesh = obj as THREE.Mesh
-    if (mesh.isMesh && mesh.material) {
-      const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
-      for (const m of materials) {
-        ;(m as THREE.MeshStandardMaterial).wireframe = wireframe
-      }
-    }
-  })
 }
 
 /** Box3 自动取景：模型居中，相机对准并保持合适距离 */

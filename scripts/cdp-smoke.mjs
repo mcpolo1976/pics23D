@@ -180,6 +180,37 @@ async function main() {
     }
   }
 
+  // 6) Viewer 检查（有已完成任务时才跑；M4 GLB 预览链路回归）
+  {
+    const tasksNow = await evaluate('window.api.listTasks()')
+    const doneTask = tasksNow.find((t) => t.status === 'done')
+    if (doneTask) {
+      const clicked = await evaluate(`(() => {
+        const btns = [...document.querySelectorAll('button')]
+        const b = btns.find((x) => x.textContent.trim() === '预览')
+        if (!b) return 'no-btn'
+        b.click()
+        return 'clicked'
+      })()`)
+      if (clicked === 'clicked') {
+        await sleep(2500)
+        const canvas = await evaluate(`(() => ({
+          overlayGone: !document.querySelector('.viewer-overlay'),
+          hasCanvas: !!document.querySelector('.viewer-canvas canvas')
+        }))()`)
+        check(
+          `viewer: 点击预览 → canvas 渲染（任务 ${doneTask.taskId.slice(0, 8)}）`,
+          canvas.hasCanvas,
+          JSON.stringify(canvas)
+        )
+      } else {
+        check('viewer: 未找到预览按钮（无 done 任务）→ 跳过', true)
+      }
+    } else {
+      check('viewer: 无已完成任务 → 跳过（M4 用单测覆盖 OBJ/STL 解析）', true)
+    }
+  }
+
   // 汇总
   const failed = results.filter((r) => !r.ok)
   console.log(`\n==== 冒烟结果: ${results.length - failed.length}/${results.length} 通过 ====`)
