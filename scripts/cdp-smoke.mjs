@@ -9,7 +9,10 @@
  * 零依赖：Node 22+ 内置 WebSocket。用法：node scripts/cdp-smoke.mjs
  */
 const CDP_PORT = 9222
-const APP_URL_PREFIX = 'http://localhost:'
+// dev 由 vite 托管（http://localhost:*），打包后从 asar 加载（file://）
+function isAppUrl(u) {
+  return u.startsWith('http://localhost:') || u.startsWith('file://')
+}
 
 let idSeq = 0
 let ws
@@ -46,7 +49,7 @@ async function findAppTarget() {
   const res = await fetch(`http://127.0.0.1:${CDP_PORT}/json/list`)
   const targets = await res.json()
   return targets.find(
-    (t) => t.type === 'page' && t.url.startsWith(APP_URL_PREFIX) && !t.url.includes('/@vite')
+    (t) => t.type === 'page' && isAppUrl(t.url) && !t.url.includes('/@vite')
   )
 }
 

@@ -3,15 +3,28 @@
  * 供 cdp-smoke-m5.mjs 验证"启动加载 → 恢复查询 → 取消"链路。
  * 用法：node scripts/m5-fixture.mjs
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
+import { existsSync, readFileSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { homedir } from 'os'
 
-const userData = join(homedir(), 'AppData', 'Roaming', 'img-to-3d')
+// userData 由 package.json 的 name 决定（%APPDATA%\img-to-3d），dev 与打包版共用；
+// electron-builder 的 productName 只影响安装包/窗口名。优先取已有 tasks.json 的目录，可用 argv[2] 强制指定。
+const roaming = join(homedir(), 'AppData', 'Roaming')
+const candidates = [
+  process.argv[2],
+  join(roaming, '图片生成3D模型'),
+  join(roaming, 'img-to-3d')
+].filter(Boolean)
+const userData =
+  candidates.find((d) => existsSync(join(d, 'tasks.json'))) ??
+  candidates.find((d) => existsSync(d)) ??
+  candidates[0]
 const tasksFile = join(userData, 'tasks.json')
 
 if (!existsSync(userData)) {
-  console.error(`userData 不存在: ${userData}（应用是否从未运行过？）`)
+  console.error(
+    `userData 不存在: ${userData}（应用是否从未运行过？可显式指定: node scripts/m5-fixture.mjs <userDataDir>）`
+  )
   process.exit(1)
 }
 

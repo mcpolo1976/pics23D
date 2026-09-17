@@ -2,6 +2,8 @@ appId: com.imgto3d.app
 productName: 图片生成3D模型
 directories:
   buildResources: build
+# 纯 JS 依赖（无原生模块），asar 打包即可
+asar: true
 files:
   - '!**/.vscode/*'
   - '!src/*'
@@ -13,6 +15,10 @@ asarUnpack:
   - resources/**
 win:
   executableName: img-to-3d
+  target:
+    - target: nsis
+      arch:
+        - x64
 nsis:
   oneClick: false
   perMachine: false
@@ -41,6 +47,3 @@ linux:
 appImage:
   artifactName: ${name}-${version}.${ext}
 npmRebuild: false
-publish:
-  provider: generic
-  url: https://example.com/auto-updates

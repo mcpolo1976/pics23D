@@ -41,7 +41,12 @@ async function evaluate(expression) {
 async function findAppTarget() {
   const res = await fetch(`http://127.0.0.1:${CDP_PORT}/json/list`)
   const targets = await res.json()
-  return targets.find((t) => t.type === 'page' && t.url.startsWith('http://localhost:'))
+  // dev 由 vite 托管（http://localhost:*），打包后从 asar 加载（file://）
+  return targets.find(
+    (t) =>
+      t.type === 'page' &&
+      (t.url.startsWith('http://localhost:') || t.url.startsWith('file://'))
+  )
 }
 
 function connect(url) {
