@@ -1,9 +1,10 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'fs'
 import { dirname, join } from 'path'
 import { logDir } from './files'
 
 /**
  * JSON 原子写：先写 *.tmp 再 rename（NTFS 同卷原子），避免写一半崩溃损坏数据。
+ * Windows 上 rename 可能被杀毒/索引器短暂占用而瞬时 EPERM，做小退避重试。
  */
 export function writeJsonAtomic(filePath: string, data: unknown): void {
   const dir = dirname(filePath)
@@ -12,7 +13,23 @@ export function writeJsonAtomic(filePath: string, data: unknown): void {
   }
   const tmp = join(dir, `.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`)
   writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf-8')
-  renameSync(tmp, filePath)
+  for (let attempt = 0; ; attempt++) {
+    try {
+      renameSync(tmp, filePath)
+      return
+    } catch (err) {
+      if (attempt >= 3) {
+        try {
+          rmSync(tmp, { force: true }) // 清理残留 tmp，避免目录堆积
+        } catch {
+          // 清理失败忽略
+        }
+        throw err
+      }
+      const waitMs = 40 * (attempt + 1)
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, waitMs)
+    }
+  }
 }
 
 export function readJson<T>(filePath: string, fallback: T): T {

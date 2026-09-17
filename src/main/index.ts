@@ -110,6 +110,19 @@ function createWindow(): BrowserWindow {
   return mainWindow
 }
 
+// 单实例锁：二次启动时聚焦已有窗口，避免多实例并发读写 tasks.json/credentials.json
+if (!app.requestSingleInstanceLock()) {
+  app.quit()
+} else {
+  app.on('second-instance', () => {
+    const win = BrowserWindow.getAllWindows()[0]
+    if (win) {
+      if (win.isMinimized()) win.restore()
+      win.focus()
+    }
+  })
+}
+
 app.whenReady().then(() => {
   electronApp.setAppUserModelId('com.imgto3d.app')
 
