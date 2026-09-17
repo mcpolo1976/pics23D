@@ -19,7 +19,7 @@ export function extForFormat(type: string): string {
 
 /**
  * 下载云端结果文件到本地。
- * 支持 http(s):// 与 file://（MockProvider 用 file:// 指向内置测试资源）。
+ * 支持 http(s):// 与 file://（自定义 scheme appfile:// 的读取在协议层完成）。
  */
 export async function downloadToFile(
   url: string,

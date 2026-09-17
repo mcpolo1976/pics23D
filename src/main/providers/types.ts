@@ -1,4 +1,11 @@
-import type { GenerateRequest, ProviderCredentials, ProviderInfo, PollResult, CostEstimate } from '@shared/types'
+import type {
+  GenerateRequest,
+  ProviderCredentials,
+  ProviderInfo,
+  PollResult,
+  CostEstimate,
+  TierId
+} from '@shared/types'
 
 /**
  * Provider 接口：新增服务商 = 实现此接口 + 在 registry.ts 注册一行。
@@ -14,6 +21,10 @@ export interface Provider {
   validateCredentials(creds: ProviderCredentials): Promise<{ ok: boolean; message: string }>
   /** 提交生成任务，返回云端任务 ID */
   submitJob(req: GenerateRequest, creds: ProviderCredentials): Promise<{ providerJobId: string }>
-  /** 轮询任务状态 */
-  pollJob(providerJobId: string, creds: ProviderCredentials): Promise<PollResult>
+  /** 轮询任务状态（tier 用于区分同一服务商的不同档位 API） */
+  pollJob(
+    providerJobId: string,
+    creds: ProviderCredentials,
+    tier: TierId
+  ): Promise<PollResult>
 }

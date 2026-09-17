@@ -277,7 +277,7 @@ export class TaskManager {
       await sleep(POLL_INTERVAL_MS + Math.floor(Math.random() * POLL_JITTER_MS))
       if (this.canceled.has(record.taskId)) throw new CanceledError()
       try {
-        const result = await provider.pollJob(record.providerJobId!, creds)
+        const result = await provider.pollJob(record.providerJobId!, creds, record.params.tier)
         netErrors = 0
         if (result.status === 'running') continue
         if (result.status === 'failed') {

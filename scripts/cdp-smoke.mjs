@@ -1,6 +1,11 @@
 /**
  * CDP 冒烟测试：连接 Electron 渲染进程（remote-debugging-port），驱动真实 IPC 链路。
- * 覆盖 M1（偏好持久化、密钥保存/掩码/测试）与 M2（mock 任务 queued→running→done）。
+ * 覆盖 M1（偏好持久化、密钥保存/掩码/测试）与 M3（真实 Provider 预估、鉴权错误路径）。
+ *
+ * 安全策略：
+ * - 未配置密钥 → 保存假密钥，验证鉴权失败得到中文错误（不产生云端任务、不耗积分）
+ * - 已配置密钥 → 绝不覆盖、绝不自动提交任务（可能是真实密钥，提交会耗积分）
+ *
  * 零依赖：Node 22+ 内置 WebSocket。用法：node scripts/cdp-smoke.mjs
  */
 const CDP_PORT = 9222
@@ -49,7 +54,7 @@ function connect(url) {
   return new Promise((resolve, reject) => {
     ws = new WebSocket(url)
     ws.onopen = resolve
-    ws.onerror = (e) => reject(new Error('WebSocket 连接失败'))
+    ws.onerror = () => reject(new Error('WebSocket 连接失败'))
     ws.onmessage = (ev) => {
       const msg = JSON.parse(ev.data)
       if (msg.id && pending.has(msg.id)) {
@@ -65,7 +70,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 const results = []
 function check(name, ok, detail = '') {
-  results.push({ name, ok, detail })
+  results.push({ name, ok })
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? ` — ${detail}` : ''}`)
 }
 
@@ -87,116 +92,92 @@ async function main() {
   )
 
   // 2) 偏好持久化（M1）
-  await evaluate(`window.api.setPrefs({ lastTier: 'pro', lastFormat: 'GLB' })`)
+  await evaluate(`window.api.setPrefs({ lastTier: 'rapid', lastFormat: 'GLB' })`)
   const s1 = await evaluate('window.api.getSettings()')
-  check('setPrefs → settings 回读', s1?.prefs?.lastTier === 'pro', JSON.stringify(s1.prefs))
+  check('setPrefs → settings 回读', s1?.prefs?.lastTier === 'rapid', JSON.stringify(s1.prefs))
 
-  // 3) 密钥保存 → 掩码回显（M1，safeStorage DPAPI）
-  await evaluate(
-    `window.api.saveSecrets('hunyuan3d', 'AKIDtest1234567890abcd', 'sk-testSecretKeyValue0099')`
-  )
-  const s2 = await evaluate('window.api.getSettings()')
-  const mask = s2?.keyHints?.hunyuan3d
-  check(
-    'secrets:save → keyHints 显示掩码且不含明文',
-    mask?.configured === true && !JSON.stringify(s2).includes('sk-testSecretKeyValue0099'),
-    JSON.stringify(mask)
-  )
+  // 3) 密钥处理（M1/M3）
+  let keyConfigured = s1?.keyHints?.hunyuan3d?.configured === true
+  if (keyConfigured) {
+    // 已有密钥：先探测。鉴权失败 → 是旧假密钥，可覆盖；探测通过 → 真密钥，严格只读
+    const probe = await evaluate(`window.api.testSecrets('hunyuan3d')`)
+    if (probe?.ok === true) {
+      check('已配置有效密钥 → 跳过写入/提交类冒烟（防耗积分）', true, '探测通过，视为真实密钥')
+    } else {
+      // 假密钥（或失效密钥）：覆盖为固定假密钥，继续完整错误路径验证
+      await evaluate(
+        `window.api.saveSecrets('hunyuan3d', 'AKIDtest1234567890abcd', 'sk-testSecretKeyValue0099')`
+      )
+      keyConfigured = false
+      check('旧密钥探测失败 → 已覆盖为假密钥继续冒烟', true, JSON.stringify(probe))
+    }
+  }
+  if (!keyConfigured) {
+    // 未配置：保存假密钥验证掩码与鉴权错误路径（不耗积分）
+    if (!s1?.keyHints?.hunyuan3d?.configured) {
+      await evaluate(
+        `window.api.saveSecrets('hunyuan3d', 'AKIDtest1234567890abcd', 'sk-testSecretKeyValue0099')`
+      )
+    }
+    const s2 = await evaluate('window.api.getSettings()')
+    const mask = s2?.keyHints?.hunyuan3d
+    check(
+      'secrets:save → keyHints 显示掩码且不含明文',
+      mask?.configured === true && !JSON.stringify(s2).includes('sk-testSecretKeyValue0099'),
+      JSON.stringify(mask)
+    )
+    const test = await evaluate(`window.api.testSecrets('hunyuan3d')`)
+    check(
+      'secrets:test 假密钥 → 鉴权失败中文提示',
+      test?.ok === false && /密钥|签名|SecretId|连接/.test(test?.message ?? ''),
+      JSON.stringify(test)
+    )
+  }
 
-  // 4) 连通性测试（mock provider 跳过真实校验，验证 IPC 全链路）
-  const test = await evaluate(`window.api.testSecrets('hunyuan3d')`)
-  check('secrets:test 返回结果', test && typeof test.ok === 'boolean', JSON.stringify(test))
-
-  // 5) 积分预估（mock 零积分）
+  // 4) 积分预估（真实计费规则：极速 GLB = 20）
   const est = await evaluate(
     `window.api.estimateCost({ providerId: 'hunyuan3d', tier: 'rapid', mode: 'image-to-3d', format: 'GLB', enablePBR: false, imageBase64: 'aGk=' })`
   )
-  check('provider:estimate mock 零积分', est?.total === 0, JSON.stringify(est))
-
-  // 6) mock 任务全链路（M2）：queued→submitting→running→downloading→done
-  const submitted = await evaluate(
-    `window.api.submitTask({ providerId: 'hunyuan3d', tier: 'rapid', mode: 'image-to-3d', format: 'GLB', enablePBR: false, imageBase64: 'aGk=' })`
+  check(
+    'provider:estimate 极速 GLB = 20 积分（含明细）',
+    est?.total === 20 && est?.items?.length > 0,
+    JSON.stringify(est)
   )
-  const taskId = submitted?.taskId
-  check('task:submit 返回 taskId', !!taskId, taskId)
+  const estPro = await evaluate(
+    `window.api.estimateCost({ providerId: 'hunyuan3d', tier: 'pro', mode: 'image-to-3d', format: 'STL', enablePBR: true, multiViewBase64: ['aGk=','aGk='], imageBase64: 'aGk=' })`
+  )
+  check(
+    'provider:estimate 专业 STL+PBR+2视图 = 45 积分',
+    estPro?.total === 45,
+    JSON.stringify(estPro)
+  )
 
-  let final = null
-  const seen = new Set()
-  for (let i = 0; i < 40; i++) {
-    await sleep(1000)
-    const tasks = await evaluate('window.api.listTasks()')
-    const t = tasks.find((x) => x.taskId === taskId)
-    if (t) {
-      seen.add(t.status)
-      if (['done', 'failed', 'canceled', 'interrupted'].includes(t.status)) {
-        final = t
+  // 5) 提交错误路径（仅假密钥场景；真实密钥不自动提交）
+  if (!keyConfigured) {
+    const submitted = await evaluate(
+      `window.api.submitTask({ providerId: 'hunyuan3d', tier: 'rapid', mode: 'image-to-3d', format: 'GLB', enablePBR: false, imageBase64: 'aGk=' }).then(r => r.taskId)`
+    )
+    check('task:submit 接受请求并返回 taskId', !!submitted, submitted)
+    let failedTask = null
+    for (let i = 0; i < 20; i++) {
+      await sleep(1000)
+      const tasks = await evaluate('window.api.listTasks()')
+      const t = tasks.find((x) => x.taskId === submitted)
+      if (t && ['failed', 'canceled'].includes(t.status)) {
+        failedTask = t
         break
       }
     }
-  }
-  check('mock 任务到达 done', final?.status === 'done', `状态流转: ${[...seen].join('→')}`)
-  check(
-    '任务包含 cube.glb 且文件落盘（fileNames）',
-    (final?.fileNames ?? []).some((n) => n.endsWith('.glb')),
-    JSON.stringify(final?.fileNames)
-  )
-  check('实扣积分为 0', final?.costActual === 0, String(final?.costActual))
-  check(
-    'outputUrls 使用 appfile:// 协议',
-    (final?.outputUrls ?? []).every((u) => u.startsWith('appfile://models/')),
-    final?.outputUrls?.[0]
-  )
-
-  // 7) appfile:// 协议实际可取到 GLB（Viewer 加载路径）
-  if (final?.outputUrls?.length) {
-    const bytes = await evaluate(
-      `fetch(${JSON.stringify(final.outputUrls[0])}).then(r => r.arrayBuffer()).then(b => b.byteLength)`
-    )
-    check('appfile:// fetch 模型文件 > 500 字节', bytes > 500, `${bytes} bytes`)
-  }
-
-  // 8) Viewer 实际渲染（点击任务列表的“预览”，GLTFLoader 走 appfile:// 加载）
-  if (final?.status === 'done') {
-    const clicked = await evaluate(`(() => {
-      const btns = [...document.querySelectorAll('button')].filter((b) => b.textContent?.trim() === '预览')
-      if (btns.length === 0) return false
-      btns[0].click()
-      return true
-    })()`)
-    check('任务列表存在“预览”按钮', clicked === true)
-    await sleep(2500)
-    const viewer = await evaluate(`(() => {
-      const overlay = document.querySelector('.viewer-overlay')
-      const canvas = document.querySelector('.viewer-canvas canvas')
-      return {
-        overlayGone: !overlay,
-        hasCanvas: !!canvas,
-        canvasW: canvas?.width ?? 0,
-        overlayText: overlay?.textContent?.trim() ?? ''
-      }
-    })()`)
     check(
-      'Viewer 渲染模型（overlay 消失 + canvas 存在）',
-      viewer.overlayGone && viewer.hasCanvas && viewer.canvasW > 0,
-      JSON.stringify(viewer)
+      '假密钥任务 → failed 且中文错误（鉴权错误路径）',
+      failedTask?.status === 'failed' && !!failedTask?.error,
+      JSON.stringify({ status: failedTask?.status, error: failedTask?.error })
     )
-    // 线框切换不崩
-    await evaluate(`(() => {
-      const cb = [...document.querySelectorAll('.viewer-toolbar input[type=checkbox]')][0]
-      if (cb) cb.click()
-      return true
-    })()`)
-    await sleep(400)
-    const stillOk = await evaluate(`!!document.querySelector('.viewer-canvas canvas')`)
-    check('线框切换后 Viewer 正常', stillOk)
-  }
-
-  // 9) 任务删除（M5 路径）
-  if (taskId) {
-    const rm = await evaluate(
-      `window.api.removeTask(${JSON.stringify(taskId)}, true).then(() => 'ok')`
-    )
-    check('task:remove 删除任务', rm === 'ok')
+    if (submitted) {
+      await evaluate(
+        `window.api.removeTask(${JSON.stringify(submitted)}, true).then(() => 'ok')`
+      )
+    }
   }
 
   // 汇总
