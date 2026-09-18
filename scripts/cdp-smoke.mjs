@@ -88,9 +88,13 @@ async function main() {
   check('app:getInfo', info && info.appVersion && info.platform, JSON.stringify(info))
   const providers = await evaluate('window.api.listProviders()')
   const hy = providers.find((p) => p.id === 'hunyuan3d')
+  const h3 = providers.find((p) => p.id === 'hi3d')
   check(
-    'providers:list 含 hunyuan3d（启用）+ 3 个未接入',
-    hy?.capabilities?.enabled === true && providers.length === 4,
+    'providers:list 含 hunyuan3d + hi3d（启用）+ meshy/tripo 未接入',
+    hy?.capabilities?.enabled === true &&
+      h3?.capabilities?.enabled === true &&
+      providers.length === 4 &&
+      h3.capabilities.tiers.length === 2,
     providers.map((p) => `${p.id}:${p.capabilities.enabled ? '启用' : '未接入'}`).join(', ')
   )
 
@@ -153,6 +157,32 @@ async function main() {
     'provider:estimate 专业 STL+PBR+2视图 = 45 积分',
     estPro?.total === 45,
     JSON.stringify(estPro)
+  )
+
+  // 4.5) Hi3D 计费规则（极速标准 20 / 白模 10 / 高质+PBR 105；多视图/面数/格式免费）
+  const estH3 = await evaluate(
+    `window.api.estimateCost({ providerId: 'hi3d', tier: 'rapid', mode: 'image-to-3d', format: 'GLB', imageBase64: 'aGk=' })`
+  )
+  check(
+    'provider:estimate Hi3D 极速 GLB = 20 积分',
+    estH3?.total === 20,
+    JSON.stringify(estH3)
+  )
+  const estH3White = await evaluate(
+    `window.api.estimateCost({ providerId: 'hi3d', tier: 'rapid', mode: 'image-to-3d', format: 'STL', enableWhiteModel: true, imageBase64: 'aGk=' })`
+  )
+  check(
+    'provider:estimate Hi3D 极速白模 STL = 10 积分',
+    estH3White?.total === 10,
+    JSON.stringify(estH3White)
+  )
+  const estH3Pro = await evaluate(
+    `window.api.estimateCost({ providerId: 'hi3d', tier: 'pro', mode: 'image-to-3d', format: 'GLB', enablePBR: true, multiViewBase64: ['aGk=','aGk=','aGk='], faceCount: 5000000, imageBase64: 'aGk=' })`
+  )
+  check(
+    'provider:estimate Hi3D 高质+PBR+3视图+面数 = 105 积分',
+    estH3Pro?.total === 105,
+    JSON.stringify(estH3Pro)
   )
 
   // 5) 提交错误路径（仅假密钥场景；真实密钥不自动提交）

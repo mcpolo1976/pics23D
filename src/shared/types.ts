@@ -33,6 +33,14 @@ export interface ProviderTierCapabilities {
   maxMultiViewImages: number
   /** 面数控制（仅专业版 Normal） */
   supportsFaceCount: boolean
+  /** 生成类型选项（专业版）；缺省时 UI 使用内置默认（标准/低面数/白模） */
+  generateTypes?: Array<{ id: 'Normal' | 'LowPoly' | 'Geometry'; label: string; hint: string }>
+  /** 面数取值范围与推荐默认值；缺省时 UI 使用 Hunyuan 默认区间 */
+  faceCountRange?: { min: number; max: number; default: number; hint: string }
+  /** 白模仅允许这些输出格式（如 Hunyuan 极速版白模仅 GLB）；缺省 = 不限制 */
+  whiteModelFormats?: ModelFormat[]
+  /** 多视图附加积分（0 或缺省 = 不加收） */
+  multiViewCredits?: number
 }
 
 export interface ProviderCapabilities {

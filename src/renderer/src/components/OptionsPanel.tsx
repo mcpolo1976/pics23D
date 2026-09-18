@@ -1,20 +1,24 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { CostEstimate, GenMode, ModelFormat, TierId } from '@shared/types'
 import { useAppStore } from '../store/app'
 import { checkImageFile, compressImage, bytesToBase64, type LoadedImage } from '../lib/image'
 import { FORMAT_LABEL, MODE_LABEL } from '../lib/format'
 import CostConfirmDialog from './CostConfirmDialog'
 
-/** 专业版生成类型选项（白模 = Geometry） */
+/** 专业版生成类型默认选项（tierCaps.generateTypes 缺省时使用；白模 = Geometry） */
 const PRO_GENERATE_TYPES: Array<{ id: 'Normal' | 'LowPoly' | 'Geometry'; label: string; hint: string }> = [
   { id: 'Normal', label: '标准', hint: '标准生成，可控制面数与 PBR' },
   { id: 'LowPoly', label: '低面数', hint: '优化布线，适合游戏资产' },
-  { id: 'Geometry', label: '白模', hint: '无贴图几何体' }
+  { id: 'Geometry', label: '白模', hint: '白模模式：PBR 与面数控制不生效' }
 ]
 
-const FACE_COUNT_MIN = 3000
-const FACE_COUNT_MAX = 1_500_000
-const FACE_COUNT_DEFAULT = 500_000
+/** 面数默认区间（tierCaps.faceCountRange 缺省时使用，即 Hunyuan） */
+const DEFAULT_FACE_RANGE = {
+  min: 3000,
+  max: 1_500_000,
+  default: 500_000,
+  hint: '3,000 – 1,500,000，默认 500,000 不计费；自定义面数 +10 积分'
+}
 
 function fmtMB(n: number): string {
   return `${(n / 1024 / 1024).toFixed(2)}MB`
@@ -40,7 +44,7 @@ function OptionsPanel(): React.JSX.Element {
   const [image, setImage] = useState<LoadedImage | null>(null)
   const [multiView, setMultiView] = useState<LoadedImage[]>([])
   const [generateType, setGenerateType] = useState<'Normal' | 'LowPoly' | 'Geometry'>('Normal')
-  const [faceCount, setFaceCount] = useState<number>(FACE_COUNT_DEFAULT)
+  const [faceCount, setFaceCount] = useState<number>(DEFAULT_FACE_RANGE.default)
   const [dragOver, setDragOver] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [estimate, setEstimate] = useState<CostEstimate | null>(null)
@@ -52,6 +56,10 @@ function OptionsPanel(): React.JSX.Element {
   const tierList = caps?.tiers ?? []
   const isPro = tier === 'pro'
   const proWhiteModel = isPro && generateType === 'Geometry'
+  const genTypes = tierCaps?.generateTypes ?? PRO_GENERATE_TYPES
+  const faceRange = tierCaps?.faceCountRange ?? DEFAULT_FACE_RANGE
+  const whiteModelFormats = tierCaps?.whiteModelFormats
+  const multiViewCredits = tierCaps?.multiViewCredits ?? 0
 
   // 服务商/档位变化时修正选中的档位与格式
   useEffect(() => {
@@ -62,6 +70,19 @@ function OptionsPanel(): React.JSX.Element {
       setFormat(tierCaps.formats[0])
     }
   }, [caps, tier, tierCaps, format])
+
+  // 服务商/档位变化时重置面数为该档位默认值，并修正生成类型（如 Hi3D 无低面数）
+  const tierKey = `${provider?.id ?? ''}:${tier}`
+  const prevTierKey = useRef(tierKey)
+  useEffect(() => {
+    if (prevTierKey.current === tierKey) return
+    prevTierKey.current = tierKey
+    setFaceCount(faceRange.default)
+    if (isPro && !genTypes.some((g) => g.id === generateType)) {
+      setGenerateType(genTypes[0].id)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tierKey])
 
   const buildRequest = useCallback((): Record<string, unknown> | null => {
     if (!provider) return null
@@ -86,7 +107,7 @@ function OptionsPanel(): React.JSX.Element {
     }
     if (isPro) {
       req.generateType = generateType
-      if (generateType === 'Normal' && faceCount !== FACE_COUNT_DEFAULT) {
+      if (generateType === 'Normal' && faceCount !== faceRange.default) {
         req.faceCount = faceCount
       }
     }
@@ -104,7 +125,8 @@ function OptionsPanel(): React.JSX.Element {
     multiView,
     prompt,
     generateType,
-    faceCount
+    faceCount,
+    faceRange
   ])
 
   // 选项变化时刷新积分预估
@@ -298,7 +320,7 @@ function OptionsPanel(): React.JSX.Element {
           {isPro && tierCaps?.supportsMultiView && (
             <div className="mv-section">
               <div className="field-label">
-                多视图（可选，最多 {tierCaps.maxMultiViewImages} 张，+10 积分）
+                多视图（可选，最多 {tierCaps.maxMultiViewImages} 张{multiViewCredits > 0 ? `，+${multiViewCredits} 积分` : ''}）
               </div>
               <div className="mv-slots">
                 {Array.from({ length: tierCaps.maxMultiViewImages }).map((_, i) => {
@@ -362,12 +384,12 @@ function OptionsPanel(): React.JSX.Element {
         </div>
       )}
 
-      {/* 专业版生成类型（白模 = Geometry） */}
+      {/* 专业版生成类型（白模 = Geometry，选项随服务商能力变化） */}
       {isPro && (
         <>
           <div className="field-label">生成类型</div>
           <div className="mode-tabs gentype-tabs">
-            {PRO_GENERATE_TYPES.map((g) => (
+            {genTypes.map((g) => (
               <button
                 key={g.id}
                 className={generateType === g.id ? 'tab active' : 'tab'}
@@ -380,23 +402,29 @@ function OptionsPanel(): React.JSX.Element {
           </div>
           {generateType === 'Normal' && tierCaps?.supportsFaceCount && (
             <label className="field">
-              <span className="field-label">目标面数（+10 积分）</span>
+              <span className="field-label">目标面数</span>
               <input
                 className="face-input"
                 type="number"
-                min={FACE_COUNT_MIN}
-                max={FACE_COUNT_MAX}
+                min={faceRange.min}
+                max={faceRange.max}
                 step={1000}
                 value={faceCount}
                 onChange={(e) => {
                   const v = Number(e.target.value)
-                  if (Number.isFinite(v)) setFaceCount(Math.min(FACE_COUNT_MAX, Math.max(FACE_COUNT_MIN, Math.round(v))))
+                  if (Number.isFinite(v)) {
+                    setFaceCount(Math.min(faceRange.max, Math.max(faceRange.min, Math.round(v))))
+                  }
                 }}
               />
-              <span className="upload-tip">{FACE_COUNT_MIN.toLocaleString()} – {FACE_COUNT_MAX.toLocaleString()}，留空/默认 500,000 不计费</span>
+              <span className="upload-tip">{faceRange.hint}</span>
             </label>
           )}
-          {proWhiteModel && <div className="hint-box">白模模式：PBR 与面数控制不生效</div>}
+          {proWhiteModel && (
+            <div className="hint-box">
+              {genTypes.find((g) => g.id === 'Geometry')?.hint ?? '白模：仅生成几何体，不含贴图'}
+            </div>
+          )}
         </>
       )}
 
@@ -436,15 +464,21 @@ function OptionsPanel(): React.JSX.Element {
             checked={enableWhiteModel}
             onChange={(e) => {
               setEnableWhiteModel(e.target.checked)
-              if (e.target.checked) setFormat('GLB')
+              if (e.target.checked && whiteModelFormats) {
+                setFormat(whiteModelFormats[0]) // 白模限定格式（如 Hunyuan 仅 GLB）
+              }
               setPrefs({ lastEnableWhiteModel: e.target.checked })
             }}
           />
-          白模（无贴图几何体，仅 GLB）
+          白模（无贴图几何体{whiteModelFormats ? `，仅 ${whiteModelFormats.join(' / ')}` : ''}）
         </label>
       )}
       {enableWhiteModel && (
-        <div className="hint-box">白模模式已强制使用 GLB 格式输出</div>
+        <div className="hint-box">
+          {whiteModelFormats
+            ? `白模模式已强制使用 ${whiteModelFormats.join(' / ')} 格式输出`
+            : '白模：仅生成几何体，不含贴图'}
+        </div>
       )}
 
       {error && <div className="msg msg-err">{error}</div>}

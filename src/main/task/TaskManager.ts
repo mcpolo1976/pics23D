@@ -103,8 +103,8 @@ export class TaskManager {
         throw new Error(`多视图最多追加 ${tier.maxMultiViewImages} 张图片`)
       }
     }
-    if (req.enableWhiteModel && req.format !== 'GLB') {
-      throw new Error('白模仅支持 GLB 格式输出')
+    if (req.enableWhiteModel && tier.whiteModelFormats && !tier.whiteModelFormats.includes(req.format)) {
+      throw new Error(`白模仅支持 ${tier.whiteModelFormats.join(' / ')} 格式输出`)
     }
 
     const params: TaskParams = {

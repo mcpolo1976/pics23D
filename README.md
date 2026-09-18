@@ -1,6 +1,6 @@
 # 图片生成3D模型
 
-根据图片（或文字描述）生成 3D 模型的 Electron 桌面应用。v1 接入腾讯混元生 3D，预留 Meshy / Tripo / Hi3D 扩展位。
+根据图片（或文字描述）生成 3D 模型的 Electron 桌面应用。已接入腾讯混元生 3D 与 Hi3D (Sparc3D)，预留 Meshy / Tripo 扩展位。
 
 ## 项目结构
 
@@ -38,12 +38,19 @@ $ npm run build:win -- -c.electronDist=node_modules/electron/dist
 ```bash
 # 打包版带调试端口启动
 $ ./dist/win-unpacked/img-to-3d.exe --remote-debugging-port=9222 &
-$ node scripts/cdp-smoke.mjs       # 通用冒烟（11 项：IPC/凭据/计费/鉴权错误路径）
+$ node scripts/cdp-smoke.mjs       # 通用冒烟（14 项：IPC/凭据/计费/鉴权错误路径）
 $ node scripts/m5-fixture.mjs      # 应用停止时注入"已中断"夹具任务
 $ node scripts/cdp-smoke-m5.mjs    # 恢复查询 → 取消 → 删除（5 项）
 ```
 
 冒烟安全策略：已配置**有效密钥**时只读探测并跳过写入/提交类检查，防止误耗积分；未配置或密钥无效时使用内置假密钥走错误路径（不产生云端任务）。
+
+## 已接入服务商
+
+| 服务商 | 档位（模型/分辨率） | 计费要点 |
+|---|---|---|
+| 腾讯混元生3D | 极速 / 专业（Hunyuan 3.1） | 极速 15 积分起、专业 20 积分起（预付费 0.1 元/积分）；失败不扣费 |
+| Hi3D (Sparc3D) | 极速版（hitem3dv2.1 / 1536fast）、高质版（hi3dv3.0 / 2048quality） | 几何 10/90 + 纹理 10 + PBR 5（1 积分 = $0.02）；白模仅几何（10/90）；多视图、面数控制、输出格式均免费；失败退还积分 |
 
 ## 数据位置
 
