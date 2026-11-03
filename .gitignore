@@ -8,3 +8,7 @@ out
 .playwright-mcp/
 
 *.tsbuildinfo
+
+# 个人 Warp 工具笔记（与项目无关）
+warp-场景1-RemoteControl.md
+warp-场景2-API-SDK-CLI.md
